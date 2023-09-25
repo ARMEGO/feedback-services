@@ -1,3 +1,6 @@
+/*
+- Create a REST API to do basic CRUD
+*/
 package main
 
 import (
@@ -11,11 +14,15 @@ import (
 	_ "github.com/lib/pq"
 )
 
-/**
-1. Employee collection - id, username, rating, reviews
-2. Review collection - id, rating, comments, owner, assignedBy, assignedOn, reviewedBy
-*/
+// Employee collection
+type employee struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Rating   int    `json:"rating"`
+	Reviews  int    `json:"reviews"`
+}
 
+// Feedback collection
 type feedback struct {
 	ID         string `json:"id"`
 	Rating     int    `json:"rating"`
@@ -25,49 +32,49 @@ type feedback struct {
 	ReviewedBy string `json:"reviewed_by"`
 }
 
-type employee struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Rating   int    `json:"rating"`
-	Reviews  int    `json:"reviews"`
-}
-
 /*
-- Add employee username
+  - Add employee username
+    @params username
 */
 func insertEmployee(c *gin.Context) {
 	var newEmployee employee
+	// bind newEmployee to psylosd request body or throw error
 	if err := c.BindJSON(&newEmployee); err != nil {
 		return
 	}
 	insertEmployee := fmt.Sprintf(`insert into employee("username") values('%s')`, newEmployee.Username)
 	db := connect()
-	defer db.Close()
+	defer db.Close() // this makes sure db is closed afer usage
 	_, e := db.Exec(insertEmployee)
 	CheckError(e)
+	// no error. Return response
 	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_EMPLOYEE_ADDED"})
 }
 
 /*
 - List employee with rating and reviews
+- @params ginContext
 */
 func getEmployees(c *gin.Context) {
 	db := connect()
 	defer db.Close()
+	// TODO: get sum of ratings and divide by reviews to get overall rating. Extra feature
 	ratingQuery := `(SELECT COUNT(rating) FROM feedback WHERE owner = username) AS rating`
+	// Get number of reviews
 	reviewsQuery := `(SELECT COUNT(*) FROM feedback WHERE owner = username) AS reviews`
+	// create employee reviews query
 	employeeQuery := fmt.Sprintf(`SELECT employee.*, %s, %s FROM employee;`, ratingQuery, reviewsQuery)
 	rows, err := db.Query(employeeQuery)
 	defer rows.Close()
 	CheckError(err)
-	var employees []employee
+	var employees []employee // we expect results to be a list
 	for rows.Next() {
 		var empployee employee
-		/**
-		TODO: for overall rating, fetch the sum and divide by reviews
-		*/
+		// TODO: for overall rating, fetch the sum and divide by reviews
+		// assign row to employee
 		err = rows.Scan(&empployee.ID, &empployee.Username, &empployee.Rating, &empployee.Reviews)
 		CheckError(err)
+		// finally push to list
 		employees = append(employees, empployee)
 	}
 
@@ -77,6 +84,7 @@ func getEmployees(c *gin.Context) {
 
 /*
 - List employee feedback by username
+- @params id
 */
 func getEmployeeFeedback(c *gin.Context) {
 	id := c.Param("id")
@@ -98,6 +106,10 @@ func getEmployeeFeedback(c *gin.Context) {
 	c.JSON(http.StatusOK, employeeFeedback)
 }
 
+/*
+- Delete employee
+@params id
+*/
 func deleteEmployeeByID(c *gin.Context) {
 	id := c.Param("id")
 	deleteStmt := fmt.Sprintf(`delete from employee where id=%s`, id)
@@ -129,6 +141,7 @@ func updateFeedback(c *gin.Context) {
 	if err := c.BindJSON(&newFeedback); err != nil {
 		return
 	}
+	// for int use old school C programming's %d
 	updateStmt := fmt.Sprintf(`update feedback set "rating"=%d, "comments"='%s' where "id"='%s'`, newFeedback.Rating, newFeedback.Comments, id)
 	fmt.Println(updateStmt)
 	db := connect()
@@ -138,11 +151,12 @@ func updateFeedback(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_FEEDBACK_UPDATED"})
 }
 
+// entru point of web services
 func main() {
 	router := gin.Default()
-	// - No origin allowed by default
 	config := cors.DefaultConfig()
-	config.AllowOrigins = []string{"*"}
+	// No origin allowed by default
+	config.AllowOrigins = []string{"*"} // Not recommented for prod
 	router.Use(cors.New(config))
 	router.POST("/employees", insertEmployee)
 	router.GET("/employees", getEmployees)
@@ -153,6 +167,7 @@ func main() {
 	router.Run("localhost:8080")
 }
 
+// this should be in env
 const (
 	host     = "localhost"
 	port     = 5433
@@ -161,6 +176,7 @@ const (
 	dbname   = "feedbackDb"
 )
 
+// TODO: Move to separate module
 func connect() *sql.DB {
 	// connection string
 	psqlconn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
@@ -177,6 +193,7 @@ func connect() *sql.DB {
 	return db
 }
 
+// TODO: Improve logging and error handling
 func CheckError(err error) {
 	if err != nil {
 		panic(err)
