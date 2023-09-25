@@ -3,11 +3,11 @@ package main
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
-
 	"database/sql"
 	"fmt"
 
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
 )
 
@@ -17,84 +17,139 @@ import (
 */
 
 type feedback struct {
-	ID      string `json:"id"`
-	Rating  int    `json:"rating"`
-	Reviews int    `json:"reviews"`
+	ID         string `json:"id"`
+	Rating     int    `json:"rating"`
+	Owner      string `json:"owner"`
+	Comments   string `json:"comments"`
+	AssignedOn string `json:"assigned_on"`
+	ReviewedBy string `json:"reviewed_by"`
 }
 
 type employee struct {
-	ID       string     `json:"id"`
-	Username string     `json:"username"`
-	Feedback []feedback `json:"feedback"`
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Rating   int    `json:"rating"`
+	Reviews  int    `json:"reviews"`
 }
 
-var employees = []employee{
-	{ID: "e1", Username: "admin", Feedback: empFeedback},
-	{ID: "e2", Username: "user", Feedback: empFeedback},
-	{ID: "e3", Username: "user1", Feedback: empFeedback},
+/*
+- Add employee username
+*/
+func insertEmployee(c *gin.Context) {
+	var newEmployee employee
+	if err := c.BindJSON(&newEmployee); err != nil {
+		return
+	}
+	insertEmployee := fmt.Sprintf(`insert into employee("username") values('%s')`, newEmployee.Username)
+	db := connect()
+	defer db.Close()
+	_, e := db.Exec(insertEmployee)
+	CheckError(e)
+	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_EMPLOYEE_ADDED"})
 }
 
-var empFeedback = []feedback{
-	{ID: "1", Rating: 2, Reviews: 5},
-	{ID: "2", Rating: 5, Reviews: 15},
-	{ID: "3", Rating: 2, Reviews: 25},
-	{ID: "4", Rating: 5, Reviews: 35},
-	{ID: "5", Rating: 1, Reviews: 45},
-	{ID: "6", Rating: 2, Reviews: 51},
-	{ID: "7", Rating: 3, Reviews: 55},
-	{ID: "8", Rating: 4, Reviews: 52},
-	{ID: "9", Rating: 1, Reviews: 50},
-}
-
+/*
+- List employee with rating and reviews
+*/
 func getEmployees(c *gin.Context) {
 	db := connect()
-	rows, err := db.Query(`SELECT * FROM "Employee"`)
-	CheckError(err)
-
+	defer db.Close()
+	ratingQuery := `(SELECT COUNT(rating) FROM feedback WHERE owner = username) AS rating`
+	reviewsQuery := `(SELECT COUNT(*) FROM feedback WHERE owner = username) AS reviews`
+	employeeQuery := fmt.Sprintf(`SELECT employee.*, %s, %s FROM employee;`, ratingQuery, reviewsQuery)
+	rows, err := db.Query(employeeQuery)
 	defer rows.Close()
+	CheckError(err)
+	var employees []employee
 	for rows.Next() {
-		var username string
-
-		err = rows.Scan(&username)
+		var empployee employee
+		/**
+		TODO: for overall rating, fetch the sum and divide by reviews
+		*/
+		err = rows.Scan(&empployee.ID, &empployee.Username, &empployee.Rating, &empployee.Reviews)
 		CheckError(err)
-
-		fmt.Println(username)
+		employees = append(employees, empployee)
 	}
 
 	CheckError(err)
-	c.JSON(http.StatusOK, rows)
+	c.JSON(http.StatusOK, employees)
 }
 
-func getFeedbackByUser(c *gin.Context) {
-	c.JSON(http.StatusOK, empFeedback)
-}
-
-func getEmployeeByID(c *gin.Context) {
+/*
+- List employee feedback by username
+*/
+func getEmployeeFeedback(c *gin.Context) {
 	id := c.Param("id")
-	for _, e := range employees {
-		if e.ID == id {
-			c.JSON(http.StatusOK, e)
-			return
-		}
+	db := connect()
+	defer db.Close()
+	employeeQuery := fmt.Sprintf(`SELECT id, rating, comments, assigned_on, reviewed_by  FROM feedback WHERE owner = '%s';`, id)
+	rows, err := db.Query(employeeQuery)
+	defer rows.Close()
+	CheckError(err)
+	var employeeFeedback []feedback
+	for rows.Next() {
+		var empFeedback feedback
+		err = rows.Scan(&empFeedback.ID, &empFeedback.Rating, &empFeedback.Comments, &empFeedback.AssignedOn, &empFeedback.ReviewedBy)
+		CheckError(err)
+		employeeFeedback = append(employeeFeedback, empFeedback)
 	}
-	c.JSON(http.StatusNotFound, gin.H{"message": "MESSAGE_EMPLOYEE_NOT_FOUND"})
+
+	CheckError(err)
+	c.JSON(http.StatusOK, employeeFeedback)
 }
 
-func postFeedback(c *gin.Context) {
+func deleteEmployeeByID(c *gin.Context) {
+	id := c.Param("id")
+	deleteStmt := fmt.Sprintf(`delete from employee where id=%s`, id)
+	db := connect()
+	defer db.Close()
+	_, e := db.Exec(deleteStmt)
+	CheckError(e)
+	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_EMPLOYEE_DELETED"})
+}
+
+// review CRUD starts
+func insertFeedback(c *gin.Context) {
 	var newFeedback feedback
 	if err := c.BindJSON(&newFeedback); err != nil {
 		return
 	}
-	empFeedback = append(empFeedback, newFeedback)
-	c.JSON(http.StatusCreated, empFeedback)
+	insertFeedback := fmt.Sprintf(`insert into feedback("owner", "rating", "comments", "assigned_on", "reviewed_by") values('%s','%d', '%s', now(), '%s')`, newFeedback.Owner, newFeedback.Rating, newFeedback.Comments, newFeedback.ReviewedBy)
+	db := connect()
+	defer db.Close()
+	_, e := db.Exec(insertFeedback)
+	CheckError(e)
+
+	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_FEEDBACK_ADDED"})
+}
+
+func updateFeedback(c *gin.Context) {
+	id := c.Param("id")
+	var newFeedback feedback
+	if err := c.BindJSON(&newFeedback); err != nil {
+		return
+	}
+	updateStmt := fmt.Sprintf(`update feedback set "rating"=%d, "comments"='%s' where "id"='%s'`, newFeedback.Rating, newFeedback.Comments, id)
+	fmt.Println(updateStmt)
+	db := connect()
+	defer db.Close()
+	_, e := db.Exec(updateStmt)
+	CheckError(e)
+	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_FEEDBACK_UPDATED"})
 }
 
 func main() {
 	router := gin.Default()
+	// - No origin allowed by default
+	config := cors.DefaultConfig()
+	config.AllowOrigins = []string{"*"}
+	router.Use(cors.New(config))
+	router.POST("/employees", insertEmployee)
 	router.GET("/employees", getEmployees)
-	router.GET("/employees/:id", getEmployeeByID)
-	router.GET("/feedback/:userId", getFeedbackByUser)
-	router.POST("/feedback", postFeedback)
+	router.DELETE("/employees/:id", deleteEmployeeByID)
+	router.GET("/employees/:id", getEmployeeFeedback)
+	router.POST("/feedback", insertFeedback)
+	router.PUT("/feedback/:id", updateFeedback)
 	router.Run("localhost:8080")
 }
 
