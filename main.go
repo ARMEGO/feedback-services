@@ -29,7 +29,13 @@ type feedback struct {
 	Owner      string `json:"owner"`
 	Comments   string `json:"comments"`
 	AssignedOn string `json:"assigned_on"`
+	AssignedBy string `json:"assigned_by"`
 	ReviewedBy string `json:"reviewed_by"`
+}
+
+type rquestFeebackFor struct {
+	Owner    string   `json:"owner"`
+	AssignTo []string `json:"assignTo"`
 }
 
 /*
@@ -90,14 +96,14 @@ func getEmployeeFeedback(c *gin.Context) {
 	id := c.Param("id")
 	db := connect()
 	defer db.Close()
-	employeeQuery := fmt.Sprintf(`SELECT id, rating, comments, assigned_on, reviewed_by  FROM feedback WHERE owner = '%s';`, id)
+	employeeQuery := fmt.Sprintf(`SELECT id, rating, comments, assigned_on, assigned_by, reviewed_by  FROM feedback WHERE owner = '%s';`, id)
 	rows, err := db.Query(employeeQuery)
 	defer rows.Close()
 	CheckError(err)
 	var employeeFeedback []feedback
 	for rows.Next() {
 		var empFeedback feedback
-		err = rows.Scan(&empFeedback.ID, &empFeedback.Rating, &empFeedback.Comments, &empFeedback.AssignedOn, &empFeedback.ReviewedBy)
+		err = rows.Scan(&empFeedback.ID, &empFeedback.Rating, &empFeedback.Comments, &empFeedback.AssignedOn, &empFeedback.AssignedBy, &empFeedback.ReviewedBy)
 		CheckError(err)
 		employeeFeedback = append(employeeFeedback, empFeedback)
 	}
@@ -135,6 +141,52 @@ func insertFeedback(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_FEEDBACK_ADDED"})
 }
 
+/*
+- Make a bulk request to give feedback
+*/
+func requestFeedbackFromUsers(c *gin.Context) {
+	var rquestFeeback rquestFeebackFor
+	if err := c.BindJSON(&rquestFeeback); err != nil {
+		return
+	}
+	insertFeedback := `insert into feedback("comments", "owner", "assigned_on", "reviewed_by") values`
+	for _, assignee := range rquestFeeback.AssignTo {
+		insertFeedback += fmt.Sprintf(`('', '%s', now(), '%s'),`, rquestFeeback.Owner, assignee)
+	}
+	// remove last trailing character
+	insertFeedback = insertFeedback[:len(insertFeedback)-1]
+	db := connect()
+	defer db.Close()
+	_, e := db.Exec(insertFeedback)
+	CheckError(e)
+
+	c.JSON(http.StatusOK, gin.H{"message": "MESSAGE_FEEDBACK_REQUESTED"})
+}
+
+/*
+- List feedback that employee can review
+- @params id
+*/
+func getFeedbackRequests(c *gin.Context) {
+	id := c.Param("id")
+	db := connect()
+	defer db.Close()
+	feedbackQuery := fmt.Sprintf(`SELECT id, rating, owner, comments, assigned_on, assigned_by, reviewed_by  FROM feedback WHERE reviewed_by = '%s';`, id)
+	rows, err := db.Query(feedbackQuery)
+	defer rows.Close()
+	CheckError(err)
+	var employeeFeedback []feedback
+	for rows.Next() {
+		var empFeedback feedback
+		err = rows.Scan(&empFeedback.ID, &empFeedback.Rating, &empFeedback.Owner, &empFeedback.Comments, &empFeedback.AssignedOn, &empFeedback.AssignedBy, &empFeedback.ReviewedBy)
+		CheckError(err)
+		employeeFeedback = append(employeeFeedback, empFeedback)
+	}
+
+	CheckError(err)
+	c.JSON(http.StatusOK, employeeFeedback)
+}
+
 func updateFeedback(c *gin.Context) {
 	id := c.Param("id")
 	var newFeedback feedback
@@ -161,8 +213,14 @@ func main() {
 	router.POST("/employees", insertEmployee)
 	router.GET("/employees", getEmployees)
 	router.DELETE("/employees/:id", deleteEmployeeByID)
+	// retrieve feeback owned by an employee
 	router.GET("/employees/:id", getEmployeeFeedback)
 	router.POST("/feedback", insertFeedback)
+	router.POST("/request-feedback", requestFeedbackFromUsers)
+
+	// retrieve feedback assigned to employee for review
+	router.GET("/feedback/:id", getFeedbackRequests)
+	// update a feedback
 	router.PUT("/feedback/:id", updateFeedback)
 	router.Run("localhost:8080")
 }
